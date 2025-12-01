@@ -1,374 +1,191 @@
-# compare_models.py
-"""
-Compare synthetic graph models (ER, BA, WS, SBM) using the analysis
-functions defined in analysis.py.
+#!/usr/bin/env python3
 
-For each model, this script:
-  - Generates a graph with roughly similar average degree.
-  - Runs connectivity, centralities, clustering, communities, etc.
-  - Stores a summary of metrics in a CSV.
-  - Produces comparison plots of degree distributions and clustering.
-
-Usage example:
-
-    python compare_models.py \
-        --n 500 \
-        --avg-degree 8 \
-        --ws-beta 0.1 \
-        --sbm-blocks 4 \
-        --sbm-p-intra 0.12 \
-        --sbm-p-inter 0.02 \
-        --out-dir results_models
-
-"""
-
-import argparse
+import csv
 import os
-from collections import defaultdict
-
 import matplotlib.pyplot as plt
+import networkx as nx
 
-from erdos import generate_erdos_renyi
-from ba import generate_barabasi_albert
-from ws import generate_watts_strogatz
-from sbm import generate_sbm_symmetric
+from er import generate_er_graph
+from ws import generate_ws_graph
+from ba import generate_ba_graph
+from sbm import generate_sbm_graph
 
-from analysis import (
-    Adjacency,
-    num_nodes,
-    num_edges,
-    compute_connectivity,
-    degree_centrality,
-    closeness_centrality,
-    betweenness_centrality,
-    pagerank,
-    clustering_coefficient,
-    compute_degree_distribution,
-    community_detection,
-    compute_modularity,
-)
+import analysis as A
 
 
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# Helper: ensure output directories exist
+# ---------------------------------------------------------
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
 
 
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+OUTPUT_DIR = "comparison_output"
+ensure_dir(OUTPUT_DIR)
+ensure_dir(f"{OUTPUT_DIR}/csv")
+ensure_dir(f"{OUTPUT_DIR}/plots")
 
 
-def summary_row_from_graph(
-    model_name: str,
-    adj: Adjacency,
-) -> dict:
-    """Run analysis.py-style metrics and return a summary row for one graph."""
+# ---------------------------------------------------------
+# Run models
+# ---------------------------------------------------------
+def run_models(num_runs=20):
+    results = {
+        "ER": [],
+        "WS": [],
+        "BA": [],
+        "SBM": []
+    }
 
-    n = num_nodes(adj)
-    m = num_edges(adj)
+    for run in range(num_runs):
+        print(f"[RUN {run+1}/{num_runs}] Generating graphs...")
 
-    # Connectivity
-    conn = compute_connectivity(adj)
-    num_components = conn["num_components"]
-    giant_size = conn["giant_component_size"]
-    isolated = conn["isolated_nodes"]
+        # --- ER ---
+        G_er = generate_er_graph(n=500, p=0.01)
+        results["ER"].append(A.compute_all_metrics(G_er))
 
-    # Degree stats
-    deg_stats = compute_degree_distribution(adj)
-    avg_degree = deg_stats["avg_degree"]
-    min_degree = deg_stats["min_degree"]
-    max_degree = deg_stats["max_degree"]
-    degree_var = deg_stats["variance"]
+        # --- WS ---
+        G_ws = generate_ws_graph(n=500, k=6, beta=0.1)
+        results["WS"].append(A.compute_all_metrics(G_ws))
 
-    # Centralities
-    deg_cent = degree_centrality(adj)
-    close_cent = closeness_centrality(adj)
-    bet_cent = betweenness_centrality(adj)
-    pr_cent = pagerank(adj)
+        # --- BA ---
+        G_ba = generate_ba_graph(n=500, m=3)
+        results["BA"].append(A.compute_all_metrics(G_ba))
 
-    # Clustering
-    clust = clustering_coefficient(adj)
-    mean_clust = sum(clust.values()) / n if n > 0 else 0.0
+        # --- SBM ---
+        sizes = [150, 150, 200]
+        P = [
+            [0.02, 0.005, 0.003],
+            [0.005, 0.02, 0.004],
+            [0.003, 0.004, 0.015],
+        ]
+        G_sbm = generate_sbm_graph(500, sizes, P)
+        results["SBM"].append(A.compute_all_metrics(G_sbm))
 
-    # Communities (greedy modularity)
-    communities = community_detection(adj)
-    node_to_comm = {}
-    for cid, group in enumerate(communities):
-        for u in group:
-            node_to_comm[u] = cid
-    mod = compute_modularity(adj, node_to_comm)
-
-    # A crude global closeness summary (average node closeness)
-    mean_closeness = sum(close_cent.values()) / n if n > 0 else 0.0
-
-    return {
-        "model": model_name,
-        "n": n,
-        "m": m,
-        "avg_degree": avg_degree,
-        "min_degree": min_degree,
-        "max_degree": max_degree,
-        "degree_variance": degree_var,
-        "num_components": num_components,
-        "giant_component_size": giant_size,
-        "isolated_nodes": isolated,
-        "mean_clustering": mean_clust,
-        "modularity": mod,
-        "mean_closeness": mean_closeness,
-        # You can add more aggregates here if you want.
-    }, deg_stats, clust
+    return results
 
 
-def write_summary_csv(path: str, rows: list[dict]) -> None:
-    """Write list of dicts to CSV with a shared header."""
-    if not rows:
-        return
+# ---------------------------------------------------------
+# Save CSV datasets for each metric
+# ---------------------------------------------------------
+def export_csv(results):
+    for model, runs in results.items():
 
-    import csv
+        # Degree distribution
+        with open(f"{OUTPUT_DIR}/csv/{model}_degree.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["run", "degree"])
+            for i, r in enumerate(runs):
+                for d in r["degrees"]:
+                    writer.writerow([i, d])
 
-    fieldnames = list(rows[0].keys())
+        # Clustering
+        with open(f"{OUTPUT_DIR}/csv/{model}_clustering.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["run", "clustering"])
+            for i, r in enumerate(runs):
+                for c in r["clustering"]:
+                    writer.writerow([i, c])
 
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
+        # Path lengths
+        with open(f"{OUTPUT_DIR}/csv/{model}_paths.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["run", "path_length"])
+            for i, r in enumerate(runs):
+                for d in r["distances"]:
+                    writer.writerow([i, d])
+
+        # Component sizes
+        with open(f"{OUTPUT_DIR}/csv/{model}_components.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["run", "component_size"])
+            for i, r in enumerate(runs):
+                for s in r["components"]:
+                    writer.writerow([i, s])
 
 
-def plot_degree_distributions(
-    out_path: str,
-    model_to_deg_hist: dict[str, dict[int, int]],
-):
-    """
-    Plot degree distributions for each model on the same figure.
-    x: degree
-    y: fraction of nodes with that degree
-    """
-    plt.figure(figsize=(7, 5))
+# ---------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------
+def plot_compare(results):
 
-    for model, hist in model_to_deg_hist.items():
-        if not hist:
-            continue
-        total = sum(hist.values())
-        xs = sorted(hist.keys())
-        ys = [hist[d] / total for d in xs]  # normalize to probabilities
-        plt.plot(xs, ys, marker="o", linestyle="-", label=model)
-
+    # ------------------------
+    # DEGREE DISTRIBUTION
+    # ------------------------
+    plt.figure(figsize=(8, 6))
+    for model, runs in results.items():
+        all_degrees = []
+        for r in runs:
+            all_degrees.extend(r["degrees"])
+        plt.hist(all_degrees, bins=40, alpha=0.5, label=model)
     plt.xlabel("Degree")
-    plt.ylabel("Probability")
+    plt.ylabel("Frequency")
     plt.title("Degree Distribution Comparison")
     plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
+    plt.savefig(f"{OUTPUT_DIR}/plots/degree_distribution.png")
+    plt.close()
+
+    # ------------------------
+    # CLUSTERING DISTRIBUTION
+    # ------------------------
+    plt.figure(figsize=(8, 6))
+    for model, runs in results.items():
+        all_c = []
+        for r in runs:
+            all_c.extend(r["clustering"])
+        plt.hist(all_c, bins=40, alpha=0.5, label=model)
+    plt.xlabel("Clustering Coefficient")
+    plt.ylabel("Frequency")
+    plt.title("Clustering Coefficient Distribution Comparison")
+    plt.legend()
+    plt.savefig(f"{OUTPUT_DIR}/plots/clustering_distribution.png")
+    plt.close()
+
+    # ------------------------
+    # PATH LENGTH DISTRIBUTION
+    # ------------------------
+    plt.figure(figsize=(8, 6))
+    for model, runs in results.items():
+        all_d = []
+        for r in runs:
+            all_d.extend(r["distances"])
+        plt.hist(all_d, bins=40, alpha=0.5, label=model)
+    plt.xlabel("Shortest Path Length")
+    plt.ylabel("Frequency")
+    plt.title("Shortest Path Length Distribution Comparison")
+    plt.legend()
+    plt.savefig(f"{OUTPUT_DIR}/plots/path_distribution.png")
+    plt.close()
+
+    # ------------------------
+    # COMPONENT SIZE DISTRIBUTION
+    # ------------------------
+    plt.figure(figsize=(8, 6))
+    for model, runs in results.items():
+        all_c = []
+        for r in runs:
+            all_c.extend(r["components"])
+        plt.hist(all_c, bins=40, alpha=0.5, label=model)
+    plt.xlabel("Component Size")
+    plt.ylabel("Frequency")
+    plt.title("Component Size Distribution Comparison")
+    plt.legend()
+    plt.savefig(f"{OUTPUT_DIR}/plots/component_distribution.png")
     plt.close()
 
 
-def plot_clustering_boxplot(
-    out_path: str,
-    model_to_clustering: dict[str, dict[int, float]],
-):
-    """
-    Boxplot of node-level clustering coefficients for each model.
-    """
-    labels = []
-    data = []
-
-    for model, clust_dict in model_to_clustering.items():
-        if not clust_dict:
-            continue
-        labels.append(model)
-        data.append(list(clust_dict.values()))
-
-    if not data:
-        return
-
-    plt.figure(figsize=(7, 5))
-    plt.boxplot(data, labels=labels, showfliers=False)
-    plt.ylabel("Clustering coefficient")
-    plt.title("Local Clustering Coefficient Comparison")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
-    plt.close()
-
-
-# ---------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compare ER / BA / WS / SBM models using analysis.py"
-    )
-
-    parser.add_argument("--n", type=int, required=True, help="Number of nodes")
-
-    parser.add_argument(
-        "--avg-degree",
-        type=float,
-        default=8.0,
-        help="Target average degree (used to choose model parameters)",
-    )
-
-    parser.add_argument(
-        "--ws-beta",
-        type=float,
-        default=0.1,
-        help="Rewiring probability for Watts–Strogatz",
-    )
-
-    # SBM parameters
-    parser.add_argument(
-        "--sbm-blocks",
-        type=int,
-        default=4,
-        help="Number of blocks for SBM (blocks * block-size should ≈ n)",
-    )
-    parser.add_argument(
-        "--sbm-block-size",
-        type=int,
-        default=None,
-        help="Block size for SBM; if not given, n // sbm-blocks",
-    )
-    parser.add_argument(
-        "--sbm-p-intra",
-        type=float,
-        default=0.12,
-        help="Intra-block edge probability for SBM",
-    )
-    parser.add_argument(
-        "--sbm-p-inter",
-        type=float,
-        default=0.02,
-        help="Inter-block edge probability for SBM",
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Base random seed (per-model offsets are used)",
-    )
-
-    parser.add_argument(
-        "--out-dir",
-        type=str,
-        required=True,
-        help="Output directory for CSVs and plots",
-    )
-
-    args = parser.parse_args()
-
-    ensure_dir(args.out_dir)
-
-    n = args.n
-    target_k = args.avg_degree
-
-    # -----------------------------
-    # Choose model-specific params
-    # -----------------------------
-    # ER: p = desired_avg_degree / (n - 1)
-    if n > 1:
-        er_p = target_k / (n - 1)
-    else:
-        er_p = 0.0
-
-    # BA: m ≈ target_k / 2 (since average degree ~ 2m)
-    ba_m = max(1, int(round(target_k / 2.0)))
-
-    # WS: k should be even and around target_k
-    ws_k = int(round(target_k))
-    if ws_k % 2 == 1:
-        ws_k += 1
-    ws_beta = args.ws_beta
-
-    # SBM: block sizes
-    sbm_blocks = args.sbm_blocks
-    if args.sbm_block_size is not None:
-        sbm_block_size = args.sbm_block_size
-    else:
-        sbm_block_size = max(1, n // sbm_blocks)
-
-    # Adjust total nodes if needed (we stick to n in generation where possible)
-    total_sbm_nodes = sbm_blocks * sbm_block_size
-    if total_sbm_nodes != n:
-        print(
-            f"[SBM] Note: blocks*block_size = {total_sbm_nodes} != n={n}. "
-            f"SBM will use {total_sbm_nodes} nodes."
-        )
-
-    sbm_p_intra = args.sbm_p_intra
-    sbm_p_inter = args.sbm_p_inter
-
-    print("=== PARAMETER SUMMARY ===")
-    print(f"n = {n}, target avg degree ≈ {target_k}")
-    print(f"ER: p = {er_p:.4f}")
-    print(f"BA: m = {ba_m}")
-    print(f"WS: k = {ws_k}, beta = {ws_beta}")
-    print(
-        f"SBM: blocks = {sbm_blocks}, block_size = {sbm_block_size}, "
-        f"p_intra = {sbm_p_intra}, p_inter = {sbm_p_inter}"
-    )
-
-    # -----------------------------
-    # Generate and analyze graphs
-    # -----------------------------
-    summary_rows: list[dict] = []
-    model_to_deg_hist: dict[str, dict[int, int]] = {}
-    model_to_clust: dict[str, dict[int, float]] = {}
-
-    # ER
-    er_adj = generate_erdos_renyi(n, er_p, seed=args.seed)
-    er_row, er_degstats, er_clust = summary_row_from_graph("ER", er_adj)
-    summary_rows.append(er_row)
-    model_to_deg_hist["ER"] = er_degstats["degree_histogram"]
-    model_to_clust["ER"] = er_clust
-
-    # BA
-    ba_adj = generate_barabasi_albert(n, ba_m, seed=args.seed + 1)
-    ba_row, ba_degstats, ba_clust = summary_row_from_graph("BA", ba_adj)
-    summary_rows.append(ba_row)
-    model_to_deg_hist["BA"] = ba_degstats["degree_histogram"]
-    model_to_clust["BA"] = ba_clust
-
-    # WS
-    ws_adj = generate_watts_strogatz(n, ws_k, ws_beta, seed=args.seed + 2)
-    ws_row, ws_degstats, ws_clust = summary_row_from_graph("WS", ws_adj)
-    summary_rows.append(ws_row)
-    model_to_deg_hist["WS"] = ws_degstats["degree_histogram"]
-    model_to_clust["WS"] = ws_clust
-
-    # SBM
-    sbm_block_sizes = [sbm_block_size] * sbm_blocks
-    sbm_adj = generate_sbm_symmetric(
-        sbm_block_sizes,
-        sbm_p_intra,
-        sbm_p_inter,
-        seed=args.seed + 3,
-    )
-    sbm_row, sbm_degstats, sbm_clust = summary_row_from_graph("SBM", sbm_adj)
-    summary_rows.append(sbm_row)
-    model_to_deg_hist["SBM"] = sbm_degstats["degree_histogram"]
-    model_to_clust["SBM"] = sbm_clust
-
-    # -----------------------------
-    # Store summary CSV
-    # -----------------------------
-    summary_csv_path = os.path.join(args.out_dir, "model_summary.csv")
-    write_summary_csv(summary_csv_path, summary_rows)
-    print(f"Saved summary metrics to {summary_csv_path}")
-
-    # -----------------------------
-    # Plots
-    # -----------------------------
-    deg_plot_path = os.path.join(args.out_dir, "degree_distribution_comparison.png")
-    plot_degree_distributions(deg_plot_path, model_to_deg_hist)
-    print(f"Saved degree distribution comparison plot to {deg_plot_path}")
-
-    clust_plot_path = os.path.join(args.out_dir, "clustering_comparison_boxplot.png")
-    plot_clustering_boxplot(clust_plot_path, model_to_clust)
-    print(f"Saved clustering comparison boxplot to {clust_plot_path}")
-
-
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    results = run_models(num_runs=20)
+    export_csv(results)
+    plot_compare(results)
+
+    print("\nAll tasks complete!")
+    print(f"CSV files saved in: {OUTPUT_DIR}/csv/")
+    print(f"Plots saved in: {OUTPUT_DIR}/plots/")
+
+
+
