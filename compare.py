@@ -1,191 +1,191 @@
 #!/usr/bin/env python3
+"""
+compare.py (NO CLI VERSION)
+
+Automatically:
+    - Generates 4 synthetic graphs (ER, BA, WS, SBM)
+    - Computes metrics using analysis.py
+    - Prints comparison
+    - Saves comparison plots automatically
+
+Run with:
+    python compare.py
+"""
 
 import csv
-import os
+from statistics import mean
+from math import inf
 import matplotlib.pyplot as plt
-import networkx as nx
 
-from er import generate_er_graph
-from ws import generate_ws_graph
-from ba import generate_ba_graph
-from sbm import generate_sbm_graph
+from analysis import (
+    num_nodes,
+    num_edges,
+    compute_connectivity,
+    clustering_coefficient,
+    community_detection,
+    bfs_shortest_paths,
+)
 
-import analysis as A
+from erdos import generate_erdos_renyi
+from ba import generate_barabasi_albert
+from ws import generate_watts_strogatz
+from sbm import generate_sbm_symmetric
 
-
-# ---------------------------------------------------------
-# Helper: ensure output directories exist
-# ---------------------------------------------------------
-def ensure_dir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-
-OUTPUT_DIR = "comparison_output"
-ensure_dir(OUTPUT_DIR)
-ensure_dir(f"{OUTPUT_DIR}/csv")
-ensure_dir(f"{OUTPUT_DIR}/plots")
+Adjacency = dict[int, set[int]]
 
 
-# ---------------------------------------------------------
-# Run models
-# ---------------------------------------------------------
-def run_models(num_runs=20):
-    results = {
-        "ER": [],
-        "WS": [],
-        "BA": [],
-        "SBM": []
+# ------------------------------------------------------------------
+# PARAMETERS — EDIT IF YOU WANT DIFFERENT SETTINGS
+# ------------------------------------------------------------------
+
+N = 500          # nodes
+SEED = 42        # reproducibility
+
+# ER
+P_ER = 0.03
+
+# BA
+M_BA = 3
+
+# WS
+K_WS = 4
+BETA_WS = 0.2
+
+# SBM
+BLOCKS = 4
+BLOCK_SIZE = 125
+P_INTRA = 0.12
+P_INTER = 0.02
+
+PLOT_PREFIX = "cmp_"   # all PNGs saved as cmp_xxx.png
+
+
+# ------------------------------------------------------------------
+# Approx avg path length
+# ------------------------------------------------------------------
+
+def approx_avg_path_length(adj: Adjacency, samples: int = 20) -> float:
+    nodes = list(adj.keys())
+    if not nodes:
+        return 0.0
+    n = len(nodes)
+    samples = min(samples, n)
+
+    import random
+    random_nodes = random.sample(nodes, samples)
+    dvals: list[int] = []
+
+    for u in random_nodes:
+        dist = bfs_shortest_paths(adj, u)
+        reachable = [d for d in dist.values() if d > 0]
+        if reachable:
+            dvals.extend(reachable)
+
+    if not dvals:
+        return inf
+    return sum(dvals) / len(dvals)
+
+
+# ------------------------------------------------------------------
+# Compute metrics for a single graph
+# ------------------------------------------------------------------
+
+def compute_metrics(adj: Adjacency) -> dict:
+    cinfo = compute_connectivity(adj)
+    comms = community_detection(adj)
+    clust = clustering_coefficient(adj)
+    avg_clust = mean(clust.values()) if clust else 0.0
+    avg_path = approx_avg_path_length(adj)
+
+    n = num_nodes(adj)
+    e = num_edges(adj)
+
+    return {
+        "nodes": n,
+        "edges": e,
+        "avg_degree": (2 * e) / max(n, 1),
+        "num_components": cinfo["num_components"],
+        "giant_component": cinfo["giant_component_size"],
+        "avg_clustering": avg_clust,
+        "approx_avg_path": avg_path,
+        "num_communities": len(comms),
     }
 
-    for run in range(num_runs):
-        print(f"[RUN {run+1}/{num_runs}] Generating graphs...")
 
-        # --- ER ---
-        G_er = generate_er_graph(n=500, p=0.01)
-        results["ER"].append(A.compute_all_metrics(G_er))
+# ------------------------------------------------------------------
+# Plot helper
+# ------------------------------------------------------------------
 
-        # --- WS ---
-        G_ws = generate_ws_graph(n=500, k=6, beta=0.1)
-        results["WS"].append(A.compute_all_metrics(G_ws))
+def plot_metric_bar(results, metric_key, ylabel, out_path):
+    labels = [name for name, _ in results]
+    values = [m[metric_key] for _, m in results]
 
-        # --- BA ---
-        G_ba = generate_ba_graph(n=500, m=3)
-        results["BA"].append(A.compute_all_metrics(G_ba))
-
-        # --- SBM ---
-        sizes = [150, 150, 200]
-        P = [
-            [0.02, 0.005, 0.003],
-            [0.005, 0.02, 0.004],
-            [0.003, 0.004, 0.015],
-        ]
-        G_sbm = generate_sbm_graph(500, sizes, P)
-        results["SBM"].append(A.compute_all_metrics(G_sbm))
-
-    return results
-
-
-# ---------------------------------------------------------
-# Save CSV datasets for each metric
-# ---------------------------------------------------------
-def export_csv(results):
-    for model, runs in results.items():
-
-        # Degree distribution
-        with open(f"{OUTPUT_DIR}/csv/{model}_degree.csv", "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["run", "degree"])
-            for i, r in enumerate(runs):
-                for d in r["degrees"]:
-                    writer.writerow([i, d])
-
-        # Clustering
-        with open(f"{OUTPUT_DIR}/csv/{model}_clustering.csv", "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["run", "clustering"])
-            for i, r in enumerate(runs):
-                for c in r["clustering"]:
-                    writer.writerow([i, c])
-
-        # Path lengths
-        with open(f"{OUTPUT_DIR}/csv/{model}_paths.csv", "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["run", "path_length"])
-            for i, r in enumerate(runs):
-                for d in r["distances"]:
-                    writer.writerow([i, d])
-
-        # Component sizes
-        with open(f"{OUTPUT_DIR}/csv/{model}_components.csv", "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["run", "component_size"])
-            for i, r in enumerate(runs):
-                for s in r["components"]:
-                    writer.writerow([i, s])
-
-
-# ---------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------
-def plot_compare(results):
-
-    # ------------------------
-    # DEGREE DISTRIBUTION
-    # ------------------------
-    plt.figure(figsize=(8, 6))
-    for model, runs in results.items():
-        all_degrees = []
-        for r in runs:
-            all_degrees.extend(r["degrees"])
-        plt.hist(all_degrees, bins=40, alpha=0.5, label=model)
-    plt.xlabel("Degree")
-    plt.ylabel("Frequency")
-    plt.title("Degree Distribution Comparison")
-    plt.legend()
-    plt.savefig(f"{OUTPUT_DIR}/plots/degree_distribution.png")
+    plt.figure(figsize=(6, 4))
+    plt.bar(labels, values)
+    plt.ylabel(ylabel)
+    plt.title(f"{metric_key} comparison")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
     plt.close()
-
-    # ------------------------
-    # CLUSTERING DISTRIBUTION
-    # ------------------------
-    plt.figure(figsize=(8, 6))
-    for model, runs in results.items():
-        all_c = []
-        for r in runs:
-            all_c.extend(r["clustering"])
-        plt.hist(all_c, bins=40, alpha=0.5, label=model)
-    plt.xlabel("Clustering Coefficient")
-    plt.ylabel("Frequency")
-    plt.title("Clustering Coefficient Distribution Comparison")
-    plt.legend()
-    plt.savefig(f"{OUTPUT_DIR}/plots/clustering_distribution.png")
-    plt.close()
-
-    # ------------------------
-    # PATH LENGTH DISTRIBUTION
-    # ------------------------
-    plt.figure(figsize=(8, 6))
-    for model, runs in results.items():
-        all_d = []
-        for r in runs:
-            all_d.extend(r["distances"])
-        plt.hist(all_d, bins=40, alpha=0.5, label=model)
-    plt.xlabel("Shortest Path Length")
-    plt.ylabel("Frequency")
-    plt.title("Shortest Path Length Distribution Comparison")
-    plt.legend()
-    plt.savefig(f"{OUTPUT_DIR}/plots/path_distribution.png")
-    plt.close()
-
-    # ------------------------
-    # COMPONENT SIZE DISTRIBUTION
-    # ------------------------
-    plt.figure(figsize=(8, 6))
-    for model, runs in results.items():
-        all_c = []
-        for r in runs:
-            all_c.extend(r["components"])
-        plt.hist(all_c, bins=40, alpha=0.5, label=model)
-    plt.xlabel("Component Size")
-    plt.ylabel("Frequency")
-    plt.title("Component Size Distribution Comparison")
-    plt.legend()
-    plt.savefig(f"{OUTPUT_DIR}/plots/component_distribution.png")
-    plt.close()
+    print(f"Saved plot: {out_path}")
 
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+def main():
+
+    # --- Generate graphs -------------------------------------------------
+
+    print("Generating graphs...")
+
+    adj_er = generate_erdos_renyi(N, P_ER, seed=SEED)
+    adj_ba = generate_barabasi_albert(N, M_BA, seed=SEED)
+    adj_ws = generate_watts_strogatz(N, K_WS, BETA_WS, seed=SEED)
+    block_sizes = [BLOCK_SIZE] * BLOCKS
+    adj_sbm = generate_sbm_symmetric(block_sizes, P_INTRA, P_INTER, seed=SEED)
+
+    graphs = {
+        "ER": adj_er,
+        "BA": adj_ba,
+        "WS": adj_ws,
+        "SBM": adj_sbm,
+    }
+
+    # --- Compute metrics -------------------------------------------------
+
+    results = []
+    print("\n=== Graph Comparison ===")
+
+    for name, adj in graphs.items():
+        print(f"\n--- {name} ---")
+        metrics = compute_metrics(adj)
+        results.append((name, metrics))
+        for k, v in metrics.items():
+            print(f"  {k}: {v}")
+
+    # --- Make plots automatically ---------------------------------------
+
+    print("\nGenerating plots...")
+
+    plot_metric_bar(results, "avg_degree", "Average Degree",
+                    f"{PLOT_PREFIX}avg_degree.png")
+
+    plot_metric_bar(results, "avg_clustering", "Average Clustering Coefficient",
+                    f"{PLOT_PREFIX}avg_clustering.png")
+
+    plot_metric_bar(results, "approx_avg_path", "Approx. Avg Path Length",
+                    f"{PLOT_PREFIX}avg_path.png")
+
+    plot_metric_bar(results, "num_communities", "Number of Communities",
+                    f"{PLOT_PREFIX}num_communities.png")
+
+    plot_metric_bar(results, "giant_component", "Giant Component Size",
+                    f"{PLOT_PREFIX}giant_component.png")
+
+    print("\nDone! All plots saved.")
+
+
 if __name__ == "__main__":
-    results = run_models(num_runs=20)
-    export_csv(results)
-    plot_compare(results)
-
-    print("\nAll tasks complete!")
-    print(f"CSV files saved in: {OUTPUT_DIR}/csv/")
-    print(f"Plots saved in: {OUTPUT_DIR}/plots/")
-
-
-
+    main()
