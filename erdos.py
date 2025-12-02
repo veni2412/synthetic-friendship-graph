@@ -1,4 +1,3 @@
-# erdos.py
 """
 Erdős–Rényi G(n, p) random graph generator.
 
@@ -15,17 +14,6 @@ Adjacency = Dict[int, Set[int]]
 
 
 def generate_erdos_renyi(n: int, p: float, seed: Optional[int] = None) -> Adjacency:
-    """
-    Generate an undirected Erdős–Rényi G(n, p) graph.
-
-    Args:
-        n: Number of nodes (>= 1), nodes will be 0..n-1.
-        p: Edge probability in [0, 1].
-        seed: Optional random seed for reproducibility.
-
-    Returns:
-        adjacency: dict[node] -> set(neighbors)
-    """
     if not (0.0 <= p <= 1.0):
         raise ValueError("p must be between 0 and 1")
 
@@ -47,7 +35,6 @@ def generate_erdos_renyi(n: int, p: float, seed: Optional[int] = None) -> Adjace
 
 
 if __name__ == "__main__":
-    # Tiny smoke test (not analysis: just sanity-check)
     G = generate_erdos_renyi(10, 0.3, seed=42)
     num_edges = sum(len(neigh) for neigh in G.values()) // 2
     print("Generated ER graph with", len(G), "nodes and", num_edges, "edges.")

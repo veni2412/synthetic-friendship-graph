@@ -17,39 +17,6 @@ Synthetic social network toolkit for generation, analysis, comparison, and recom
 - `compare.py`: Multi-model generation + comparison plots
 - `recommender.py`: Link prediction + personality recommendations
 
-**Analysis (`analysis.py`)**
-- **Connectivity**: components, giant component, isolated nodes
-- **Centrality**: degree, closeness, betweenness (Brandes), PageRank
-- **Clustering**: local coefficient per node
-- **Communities**: greedy modularity optimization
-- **Personality (Big Five)**:
-  - `E`: degree centrality
-  - `O`: betweenness
-  - `A`: clustering
-  - `C`: closeness
-  - `N`: inverse of (degree + clustering)
-- **Extras**: homophily utilities, degree stats, CSV export, personality scatter (E vs A)
-
-**Model Comparison (`compare.py`)**
-- Generates ER, BA, WS, SBM with comparable parameters
-- Computes per-run summaries:
-  - nodes, edges, avg degree
-  - components, giant component size
-  - avg clustering, approx avg shortest path (giant component)
-  - communities (count)
-- Saves plots:
-  - `avg_degree_by_model.png`
-  - `avg_clustering_by_model.png`
-  - `avg_path_by_model.png`
-  - `giant_component_by_model.png`
-  - histograms: degree, clustering, path, component size
-
-**Friend Recommender (`recommender.py`)**
-- Structural scores: CN, Jaccard, PA, Adamic–Adar, Resource Allocation, Katz
-- Personality similarity: cosine of Big Five vectors
-- Min–max normalization + weighted sum:
-  - `final = w_cn*CN + w_jac*Jacc + ... + w_katz*Katz + w_pers*Personality`
-
 **Quick Start**
 
 Analyze a single graph (SBM example):

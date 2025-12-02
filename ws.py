@@ -1,4 +1,3 @@
-# ws.py
 """
 Watts–Strogatz small-world graph generator.
 
