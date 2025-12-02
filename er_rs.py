@@ -1,9 +1,9 @@
 """
-sbm_link_prediction_manual.py
+er_link_prediction_manual.py
 
 Full pipeline:
- - generate Stochastic Block Model (custom generator)
- - split edges into train/test (temporal shuffled split)
+ - generate Erdős–Rényi G(n,p) graph (custom generator)
+ - split edges into train/test (shuffled temporal split)
  - sample negative (non-)edges for testing
  - compute heuristic link-prediction scores (CN, Jaccard, AA, RA, PA)
  - compute Katz scores via dense NumPy matrix power-series (no scipy)
@@ -16,71 +16,34 @@ import numpy as np
 import time
 
 # ---------------------------
-# 1) SBM GENERATOR (YOUR VERSION)
+# 1) ER generator (your code)
 # ---------------------------
 
 Adjacency = Dict[int, Set[int]]
 
-def generate_sbm(
-    block_sizes: List[int],
-    p_matrix: List[List[float]],
-    seed: Optional[int] = None
-) -> Adjacency:
+def generate_erdos_renyi(n: int, p: float, seed: Optional[int] = None) -> Adjacency:
+    if not (0.0 <= p <= 1.0):
+        raise ValueError("p must be between 0 and 1")
+
+    if n <= 0:
+        raise ValueError("n must be positive")
 
     if seed is not None:
         random.seed(seed)
 
-    if not block_sizes:
-        raise ValueError("block_sizes must be a non-empty list")
-
-    k = len(block_sizes)
-    if len(p_matrix) != k or any(len(row) != k for row in p_matrix):
-        raise ValueError("p_matrix must be a k x k matrix")
-
-    for a in range(k):
-        for b in range(k):
-            if not (0.0 <= p_matrix[a][b] <= 1.0):
-                raise ValueError("Probabilities must be in [0,1]")
-
-    block_of = []
-    for block_index, size in enumerate(block_sizes):
-        if size <= 0:
-            raise ValueError("Block sizes must be positive")
-        for _ in range(size):
-            block_of.append(block_index)
-
-    n = len(block_of)
     adjacency: Adjacency = {i: set() for i in range(n)}
 
     for i in range(n):
-        bi = block_of[i]
         for j in range(i + 1, n):
-            bj = block_of[j]
-            if random.random() < p_matrix[bi][bj]:
+            if random.random() < p:
                 adjacency[i].add(j)
                 adjacency[j].add(i)
 
     return adjacency
 
 
-def generate_sbm_symmetric(
-    block_sizes: List[int],
-    p_intra: float,
-    p_inter: float,
-    seed: Optional[int] = None
-) -> Adjacency:
-
-    k = len(block_sizes)
-    p_matrix = [
-        [(p_intra if a == b else p_inter) for b in range(k)]
-        for a in range(k)
-    ]
-
-    return generate_sbm(block_sizes, p_matrix, seed)
-
-
 # ---------------------------
-# 2) HELPERS
+# 2) Helpers
 # ---------------------------
 
 def adjacency_to_edge_list(adj: Adjacency) -> List[Tuple[int, int]]:
@@ -93,22 +56,16 @@ def adjacency_to_edge_list(adj: Adjacency) -> List[Tuple[int, int]]:
 
 
 # ---------------------------
-# 3) TEMPORAL SPLIT (SBM)
+# 3) Temporal split (manual)
 # ---------------------------
 
-def generate_temporal_sbm_graph_manual(
-    block_sizes=[50, 50, 50, 50],
-    p_intra=0.3,
-    p_inter=0.02,
-    train_frac=0.7,
-    seed=int(time.time())
-):
+def generate_temporal_er_graph_manual(n=200, p=0.03, train_frac=0.7, seed=int(time.time())):
 
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
-    adj_full = generate_sbm_symmetric(block_sizes, p_intra, p_inter, seed)
+    adj_full = generate_erdos_renyi(n, p, seed)
     edges = adjacency_to_edge_list(adj_full)
     random.shuffle(edges)
 
@@ -116,7 +73,6 @@ def generate_temporal_sbm_graph_manual(
     Eold = edges[:split_idx]
     Enew = edges[split_idx:]
 
-    n = sum(block_sizes)
     adj_train: Adjacency = {i: set() for i in range(n)}
     for u, v in Eold:
         adj_train[u].add(v)
@@ -126,10 +82,10 @@ def generate_temporal_sbm_graph_manual(
 
 
 # ---------------------------
-# 4) NEGATIVE SAMPLING
+# 4) Negative sampling
 # ---------------------------
 
-def generate_test_pairs_manual(adj_full: Adjacency, Enew: List[Tuple[int, int]], seed=None):
+def generate_test_pairs_manual(adj_full: Adjacency, Enew: List[Tuple[int, int]], seed: Optional[int] = None):
 
     if seed is not None:
         random.seed(seed)
@@ -139,11 +95,11 @@ def generate_test_pairs_manual(adj_full: Adjacency, Enew: List[Tuple[int, int]],
 
     neg_set = set()
     needed = len(Enew)
+    attempts = 0
 
     while len(neg_set) < needed:
         u = random.randrange(n)
         v = random.randrange(n)
-
         if u == v:
             continue
 
@@ -152,6 +108,10 @@ def generate_test_pairs_manual(adj_full: Adjacency, Enew: List[Tuple[int, int]],
             continue
 
         neg_set.add((a, b))
+        attempts += 1
+
+        if attempts > needed * 10000:
+            raise RuntimeError("Negative sampling failed (graph too dense).")
 
     neg = list(neg_set)
     y_true = np.array([1] * len(Enew) + [0] * len(neg))
@@ -161,7 +121,7 @@ def generate_test_pairs_manual(adj_full: Adjacency, Enew: List[Tuple[int, int]],
 
 
 # ---------------------------
-# 5) HEURISTIC SCORES
+# 5) Link-prediction heuristics
 # ---------------------------
 
 def common_neighbors_score(adj, u, v):
@@ -194,7 +154,7 @@ def preferential_attachment_score(adj, u, v):
 
 
 # ---------------------------
-# 6) KATZ (DENSE)
+# 6) Katz (dense NumPy)
 # ---------------------------
 
 def katz_scores_matrix_dense(adj: Adjacency, beta=0.005, max_iter=5):
@@ -221,13 +181,16 @@ def katz_score(katz_mat, u, v):
 
 
 # ---------------------------
-# 7) MANUAL ROC-AUC
+# 7) Manual ROC-AUC
 # ---------------------------
 
 def manual_roc_auc(y_true, scores):
 
     pos_scores = scores[y_true == 1]
     neg_scores = scores[y_true == 0]
+
+    n_pos = len(pos_scores)
+    n_neg = len(neg_scores)
 
     wins = 0
     ties = 0
@@ -237,12 +200,12 @@ def manual_roc_auc(y_true, scores):
         wins += np.count_nonzero(cmp > 0)
         ties += np.count_nonzero(cmp == 0)
 
-    auc = (wins + 0.5 * ties) / (len(pos_scores) * len(neg_scores))
+    auc = (wins + 0.5 * ties) / (n_pos * n_neg)
     return float(auc)
 
 
 # ---------------------------
-# 8) EVALUATION
+# 8) Evaluation
 # ---------------------------
 
 def evaluate_model(adj_train, pairs, y_true, method, katz_mat=None):
@@ -268,28 +231,23 @@ def evaluate_model(adj_train, pairs, y_true, method, katz_mat=None):
 
 
 # ---------------------------
-# 9) MAIN EXPERIMENT (SBM)
+# 9) Main experiment
 # ---------------------------
 
 if __name__ == "__main__":
 
-    BLOCK_SIZES = [50, 50, 50, 50]
-    P_INTRA = 0.3
-    P_INTER = 0.02
+    N = 200
+    P = 0.03
     TRAIN_FRAC = 0.7
     SEED = int(time.time())
 
     BETA = 0.005
     KATZ_MAX_ITER = 5
 
-    print("\n=== GENERATING TEMPORAL SBM GRAPH (MANUAL) ===")
+    print("\n=== GENERATING TEMPORAL ER GRAPH (MANUAL) ===")
 
-    adj_train, adj_full, Eold, Enew = generate_temporal_sbm_graph_manual(
-        block_sizes=BLOCK_SIZES,
-        p_intra=P_INTRA,
-        p_inter=P_INTER,
-        train_frac=TRAIN_FRAC,
-        seed=SEED
+    adj_train, adj_full, Eold, Enew = generate_temporal_er_graph_manual(
+        n=N, p=P, train_frac=TRAIN_FRAC, seed=SEED
     )
 
     print("Training Edges:", len(Eold))
@@ -313,4 +271,4 @@ if __name__ == "__main__":
         print(f"{method:8s} AUC: {auc:.4f}")
 
     best_model = max(results, key=results.get)
-    print("\n✅ BEST RECOMMENDER ON SBM GRAPH:", best_model)
+    print("\n✅ BEST RECOMMENDER ON ER GRAPH:", best_model)
