@@ -1,4 +1,3 @@
-# sbm.py
 """
 Stochastic Block Model (SBM) graph generator.
 
@@ -126,7 +125,6 @@ def generate_sbm_symmetric(
 
 
 if __name__ == "__main__":
-    # Tiny smoke test (not analysis; just to be sure it runs)
     sizes = [30, 30, 40]
     G = generate_sbm_symmetric(sizes, p_intra=0.3, p_inter=0.05, seed=42)
     num_edges = sum(len(neigh) for neigh in G.values()) // 2

@@ -1,4 +1,3 @@
-# ba.py
 """
 Barabási–Albert scale-free graph generator (preferential attachment).
 

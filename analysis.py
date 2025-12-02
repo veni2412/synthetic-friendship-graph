@@ -1,4 +1,3 @@
-# analysis.py
 """
 Analysis pipeline for synthetic graphs.
 
@@ -258,6 +257,24 @@ def _minmax_normalize(values: Dict[int, float]) -> Dict[int, float]:
     return {u: (v - vmin) / (vmax - vmin) for u, v in values.items()}
 
 
+def _zscore_normalize(values: Dict[int, float]) -> Dict[int, float]:
+    """
+    Z-score normalize a dict of node -> value and squash to [0, 1]
+    via logistic sigmoid: norm = 1 / (1 + exp(-z)). If std == 0,
+    return 0.5 for all.
+    """
+    if not values:
+        return {}
+    vs = list(values.values())
+    mean = sum(vs) / len(vs)
+    var = sum((v - mean) ** 2 for v in vs) / len(vs)
+    std = var ** 0.5
+    if std == 0:
+        return {u: 0.5 for u in values}
+    import math
+    return {u: 1.0 / (1.0 + math.exp(-(v - mean) / std)) for u, v in values.items()}
+
+
 # ---------------------------------------------------------------------
 # PageRank (from scratch)
 # ---------------------------------------------------------------------
@@ -309,6 +326,8 @@ def compute_big_five_personality(
     close_cent: Dict[int, float],
     bet_cent: Dict[int, float],
     noise_sigma: float = 0.0,
+    weights: Optional[Dict[str, float]] = None,
+    use_zscore: bool = True,
 ) -> Dict[int, Dict[str, float]]:
     """
     Compute Big Five-like personality traits for each node based on graph structure.
@@ -325,10 +344,22 @@ def compute_big_five_personality(
     clust = clustering_coefficient(adj)
 
     # normalize all metrics into [0, 1]
-    deg_n   = _minmax_normalize(deg_cent)
-    bet_n   = _minmax_normalize(bet_cent)
-    close_n = _minmax_normalize(close_cent)
-    clust_n = _minmax_normalize(clust)
+    if use_zscore:
+        deg_n   = _zscore_normalize(deg_cent)
+        bet_n   = _zscore_normalize(bet_cent)
+        close_n = _zscore_normalize(close_cent)
+        clust_n = _zscore_normalize(clust)
+    else:
+        deg_n   = _minmax_normalize(deg_cent)
+        bet_n   = _minmax_normalize(bet_cent)
+        close_n = _minmax_normalize(close_cent)
+        clust_n = _minmax_normalize(clust)
+
+    # default weights for N: balanced contribution from degree, clustering, closeness
+    # users can override by passing weights={"deg": ..., "clust": ..., "close": ...}
+    w = {"deg": 0.33, "clust": 0.33, "close": 0.34}
+    if weights:
+        w.update({k: v for k, v in weights.items() if k in w})
 
     personalities: Dict[int, Dict[str, float]] = {}
 
@@ -341,7 +372,9 @@ def compute_big_five_personality(
         O = bet_n[u]             # openness
         A = clust_n[u]           # agreeableness
         C = close_n[u]           # conscientiousness
-        N = 1.0 - 0.5 * (deg_n[u] + clust_n[u])  # isolated -> higher N
+        # Reweighted Neuroticism: inverse of weighted combination of degree, clustering, closeness
+        inv_sum = w["deg"] * deg_n[u] + w["clust"] * clust_n[u] + w["close"] * close_n[u]
+        N = 1.0 - inv_sum
 
         def noisy(x: float) -> float:
             if noise_sigma <= 0.0:
